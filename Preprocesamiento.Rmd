@@ -1,0 +1,603 @@
+---
+title: "Calidad del Aire"
+author: "Iuliia Rytck (irytck@posgrado.upv.es)"
+date: "`r format(Sys.Date(), '%d de %B %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '4'
+    df_print: paged
+  pdf_document:
+    toc: yes
+    toc_depth: 4
+    number_sections: yes
+  word_document:
+    toc: yes
+    toc_depth: '4'
+subtitle: Trabajo de curso
+indent: yes
+link-citations: yes
+header-includes:
+- \usepackage[spanish]{babel}
+- \definecolor{shadecolor}{RGB}{235,235,235}
+- \setlength{\parskip}{1ex plus 0.5ex minus 0.2ex}
+- \renewcommand{\and}{\\}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      comment = "",
+                      out.width = "70%",
+                      out.height = "70%",
+                      fig.align = "center",
+                      cache = TRUE)
+library(readr) 
+library(tidyverse)
+library(mice)
+library(knitr)
+library(plotly)
+library(dplyr)
+library(mice)
+library(rpart)
+library(dplyr)
+library(knitr)
+library(forcats)
+library(tidyverse)
+library(rpart.plot)
+library(DMwR2)
+library(caret)
+library(FactoMineR)
+library(e1071)
+library(cluster)
+library(randomForest)
+library(class)
+library(kernlab)
+library(factoextra) 
+library(caret)
+library(MASS)
+library(ipred)
+library(adabag)
+library(pROC)
+```
+
+\newpage
+
+# Introducción
+
+La base de datos proporciona información sobre la calidad del aire en Valencia. Es una base de datos del Ayuntamiento de Valencia conocida como el Sistema de Información Territorial de Valencia (SIT-Valencia) y es una herramienta de gestión de información geográfica que recopila y almacena datos sobre la ciudad.
+La base de datos tiene 43388 observaciones y 34 columnas.  De las cuales 19 variables cuantitativas que corresponden a la concentración de partículas en el aire: PM1, PM2.5, PM10, NO, NO2, NOx, O3, SO2, CO, NH3, C7H8, C6H6, Ruido, C8H10, As (ng/m³), Ni (ng/m³), y Cd (ng/m³).  
+Otras 8 variables cuantitativas que corresponden a las condiciones meteorológicas: 
+Velocidad del viento, Dirección del viento, Temperatura, Humedad relativa, Presión, Radiación solar, Precipitación, Velocidad maxima del viento.
+
+Y demás variables: Id, Fecha, Día de la semana, Día del mes y Estación.
+
+\newpage
+
+# Pretratamiento
+
+## Carga de la base de datos
+
+```{r, message=FALSE}
+rvvcca <-read_delim("rvvcca.csv", delim = ";",
+                    escape_double = FALSE, trim_ws = TRUE)
+```
+
+```{r}
+dim(rvvcca)
+head(rvvcca)
+(estaciones<-unique(rvvcca$Estacion))
+range(as.Date(rvvcca$Fecha))
+```
+# La estructura de la base de datos:
+13 bloques que se refieren a las 13 estaciones meteorológicas. Cada estación observada en distintos instantes del tiempo desde “2004-01-01" hasta “2022-12-31”. Para cada estación se guardan los valores de las 19 variables cuantitativas que corresponden a la concentración de partículas en el aire.
+
+# Análisis de Datos Faltantes:
+
+```{r}
+datos_faltantes <- data.frame(Variables = names(rvvcca), Faltantes = colSums(is.na(rvvcca)))
+kable(datos_faltantes)
+```
+
+
+```{r, echo=FALSE}
+ValenciaCentro<-filter(rvvcca, Estacion=="Valencia Centro")
+ConselleriaMeteo<-filter(rvvcca, Estacion=="Conselleria Meteo")
+AvdaFrancia<-filter(rvvcca, Estacion=="Avda. Francia")
+Politecnico<-filter(rvvcca, Estacion=="Politecnico")
+Viveros<-filter(rvvcca, Estacion=="Viveros")
+MolidelSol<-filter(rvvcca, Estacion=="Moli del Sol")       
+BulevardSud<-filter(rvvcca, Estacion=="Bulevard Sud")
+PistaSilla<-filter(rvvcca, Estacion=="Pista Silla")
+NazaretMeteo<-filter(rvvcca, Estacion=="Nazaret Meteo")
+PuertoMollTransPonent<-filter(rvvcca, Estacion=="Puerto Moll Trans. Ponent")
+PuertollitanticTuria<-filter(rvvcca, Estacion=="Puerto llit antic Turia")
+ValenciaOlivereta<-filter(rvvcca, Estacion=="Valencia Olivereta")
+PuertoValencia<-filter(rvvcca, Estacion=="Puerto Valencia")       
+```
+
+# Patrones de los datos faltantes para cada estacion se puede observar en el anexo I
+```{r, echo=FALSE, message=FALSE}
+pdf("patrones.pdf")
+invisible(md.pattern(ValenciaCentro, rotate.names = TRUE))
+invisible(md.pattern(ConselleriaMeteo, rotate.names = TRUE))
+invisible(md.pattern(Politecnico, rotate.names = TRUE))
+invisible(md.pattern(AvdaFrancia, rotate.names = TRUE))
+invisible(md.pattern(Viveros, rotate.names = TRUE))
+invisible(md.pattern(MolidelSol, rotate.names = TRUE))
+invisible(md.pattern(BulevardSud, rotate.names = TRUE))
+invisible(md.pattern(PistaSilla, rotate.names = TRUE))
+invisible(md.pattern(NazaretMeteo, rotate.names = TRUE))
+invisible(md.pattern(PuertoMollTransPonent, rotate.names = TRUE))
+invisible(md.pattern(PuertollitanticTuria, rotate.names = TRUE))
+invisible(md.pattern(ValenciaOlivereta, rotate.names = TRUE))
+dev.off()
+```
+
+# Representacion gráfica de los NAs
+
+```{r, echo=FALSE}
+# Guardamos la cantidad de NA de todas las estaciones
+num_na <- sapply(rvvcca, function(x) sum(is.na(x)))
+
+# Lo representamos en un barplot interactivo
+plot_ly(x = colnames(rvvcca), y = num_na, type = "bar")
+```
+
+```{r, echo=FALSE}
+# Creamos dataframe auxi con el nombre de las variables y su tipo
+df<-rvvcca
+auxiliares <- function(df){
+  auxi.df <- data.frame("variables" = colnames(df),
+                        "tipo" = sapply(df, FUN = class),
+                        row.names = NULL)
+  return(auxi.df)
+}
+```
+
+```{r, echo=FALSE}
+# Cálculo de porcentaje de NAs por columnas (variables)
+numNA.cols <- function(df, auxi){
+  numNA <- apply(df, 2, function(x) sum(is.na(x)))
+  percNA <- round(100*apply(df, 2, function(x) mean(is.na(x))), 2)
+  tablaNA <- data.frame("tipo" = auxi[, -1], numNA, percNA)
+  tablaNA.cols <- tablaNA %>%
+    filter(numNA>0) %>% # Para que aparezcan los que tienen al menos un NA
+    arrange(desc(percNA)) # Ordenar de forma descendente
+  return(tablaNA.cols)
+}
+```
+
+```{r, echo=FALSE}
+# Calculo de porcentaje de NAs por filas (observaciones)
+numNA.rows <- function(df){
+  numNA <- apply(df, 1, function(x) sum(is.na(x)))
+  percNA <- round(100*apply(df, 1, function(x) mean(is.na(x))), 2)
+  tablaNA <- data.frame(dia = rownames(df), numNA, percNA)
+  tablaNA.rows <- tablaNA %>%
+    filter(numNA>0) %>% # Para que aparezcan los que tienen al menos un NA
+    arrange(desc(percNA)) # Ordenar de forma descendente
+  return(tablaNA.rows)
+}
+```
+
+# Resumen de los datos faltantes por columna:
+
+```{r, echo=FALSE}
+auxi <- auxiliares(df)
+table(auxi$tipo)
+
+(tablaNA.cols <- numNA.cols(df, auxi))
+tablaNA.rows <- numNA.rows(df)
+```
+
+# OBSERVACIONES:
+
+Entre las 34 variables 28 tienen valores NA. En todas las filas hay al menos un valor NA
+
+1. Valorar que hacer con las variables que tienen alto % de NA.
+2. Propuesta: Reducir datos frecuencia de los datos a semanales o mensuales.
+3. Eliminar las variables con más de 70% de los datos faltantes.
+4. Imputar las variables con al menos 30% de los datos completos.
+
+# Agrupacion semanal
+```{r, echo=FALSE}
+# Agrupar por semanas y estación (Formato fecha --> Año Semana)
+df$week_num <- strftime(df$Fecha, format = "%Y %V") # creamos columna del número de semana y año
+
+colnames(df)[which(colnames(df)=="B(a)p (ng/m³)")] <- "B.a.p..ng.m.."
+
+df.filtered.week <- df %>% group_by(week_num, Estacion) %>% 
+  summarise_at(vars(PM1:B.a.p..ng.m..),
+               mean, na.rm = TRUE)
+```
+
+# Resumen NAs tras agrupación semanal:
+
+```{r, echo=FALSE}
+# Comprobamos el número de NAs
+auxi.filtered.week <- auxiliares(df.filtered.week)
+(tablaNA.cols.filtered.week <- numNA.cols(df.filtered.week, auxi.filtered.week))
+tablaNA.rows.filtered.week <- numNA.rows(df.filtered.week)
+```
+
+# Representacion gráfica NAs agrupado por semana:
+
+```{r, echo=FALSE}
+# Representacion gráfica NAs agrupado por semana
+plot_ly(x = rownames(tablaNA.cols.filtered.week), y = tablaNA.cols.filtered.week$percNA, type = "bar")
+```
+
+### Observaciones:
+
+Tras agrupacion por semana se obtiene un dataframe dimension 6247x29. Hay 16 variables con al menos 30% de los datos completos.
+ 
+# Agrupación mensual:
+
+```{r, echo=FALSE}
+# Agrupamos por mes y estación (Formato fecha --> Año Mes)
+df$month_num <- strftime(df$Fecha, format = "%Y %m") # creamos columna del número del mes y año
+
+df.filtered.month <- df %>% group_by(month_num, Estacion) %>% 
+  summarise_at(vars(PM1:B.a.p..ng.m..),
+               mean, na.rm = TRUE)
+```
+
+# Resumen NAs tras agrupación mensual:
+
+```{r}
+# Comprobamos el número de NAs
+auxi.filtered.month <- auxiliares(df.filtered.month)
+(tablaNA.cols.filtered.month <- numNA.cols(df.filtered.month, auxi.filtered.month))
+tablaNA.rows.filtered.month <- numNA.rows(df.filtered.month)
+```
+
+# Representacion gráfica NAs agrupado por mes:
+
+```{r}
+# Representacion gráfica NAs agrupado por mes
+plot_ly(x = rownames(tablaNA.cols.filtered.month), y = tablaNA.cols.filtered.month$percNA, type = "bar")
+```
+
+# Observaciones
+
+Tras agrupacion por mes se obtiene un dataframe dimension 1440x29. Pero se ha mejorado el porcentaje de los datos faltantes. Hay 16 variables con al menos 30% de los datos completos.
+
+
+```{r}
+summary(df.filtered.month)
+```
+
+# Imputacion con paquete mice
+
+## Imputacion de datos agrupados por mes.
+
+```{r, message=FALSE}
+names(df.filtered.month)<-c("month","Estacion","PM1","PM2.5","PM10", "NO","NO2","NOx","O3","SO2","CO","NH3","C7H8","C6H6","Ruido","C8H10","Vviento","Dviento","Temperatura","Humedad","Presion","Radiacion","Precipitacion","VMviento","As","Ni","Cd","Pb","B")
+
+# Configurar el modelo de imputación
+
+configuracion.month <- mice(df.filtered.month, m = 5, method = "pmm", seed = 123)
+
+
+# Imputar los valores faltantes
+df.month.imputado <- complete(configuracion.month)
+```
+
+```{r}
+sum(is.na(df.month.imputado))
+```
+
+## Imputacion de datos agrupados por semana.
+
+```{r, message=FALSE}
+names(df.filtered.week)<-c("week","Estacion","PM1","PM2.5","PM10", "NO","NO2","NOx","O3","SO2","CO","NH3","C7H8","C6H6","Ruido","C8H10","Vviento","Dviento","Temperatura","Humedad","Presion","Radiacion","Precipitacion","VMviento","As","Ni","Cd","Pb","B")
+
+# Configurar el modelo de imputación
+configuracion.week <- mice(df.filtered.week, m = 5, method = "pmm", seed = 123)
+
+
+# Imputar los valores faltantes
+df.week.imputado <- complete(configuracion.week)
+```
+
+```{r}
+sum(is.na(df.week.imputado))
+```
+
+### Eliminamos variables con más de 80% de datos faltantes
+
+```{r}
+df.week <- subset(df.week.imputado, select = -c(As, B, Pb, Cd, Ni, C6H6, C7H8, C8H10, NH3))
+df.month <- subset(df.month.imputado, select = -c(As, B, Pb, Cd, Ni, C6H6, C7H8, C8H10, NH3))
+```
+
+Otro problema: las estaciones no estan obsrvadas en el mismo rango de 2004-2022. 
+
+```{r}
+# Cambiar el formato de la columna "week2 a formato fecha
+df.week %>% 
+  group_by(Estacion) %>% 
+  arrange(week, desc = TRUE) %>%
+  summarise(fecha_min = min(week), fecha_max = max(week))
+```
+7 estaciones tienen observaciones de los ultimos 10 años (2012-2022).
+9 estaciones tienen observaciones de los ultimos 5 años (2018-2022)
+10 estaciones tienen observaciones de los ultimos 3 años (2020-2022)
+
+Selecciono las 7 estaciones con observaciones de los ultimos 10 años.
+
+```{r}
+# Seleccionar las observaciones correspondientes a las 7 estaciones observadas entre 2012 y 2022.
+df.week.subset <- df.week[df.week$Estacion %in% c("Avda.Francia", "Bulevard Sud", "Conselleria Meteo", "Moli del Sol", "Pista Silla", "Politecnico", "Viveros"), ]
+```
+
+df.week.subset 4756 obs of 20 variables.
+
+```{r}
+table(df.week.subset$Estacion)
+```
+
+
+```{r}
+df.week.filtered <- df.week %>% 
+  filter(Estacion %in% unique(df.week$Estacion), week >= "2012 01", week <= "2022 52")
+
+df.week.filtered %>% 
+  group_by(Estacion) %>% 
+  arrange(week, desc = TRUE) %>%
+  summarise(fecha_min = min(week), fecha_max = max(week))
+
+```
+
+```{r}
+df.month.subset <- df.month[df.month$Estacion %in% c("Avda. Francia", "Bulevard Sud", "Conselleria Meteo", "Moli del Sol", "Pista Silla", "Politecnico", "Viveros"), ]
+table(df.month.subset$Estacion)
+```
+```{r}
+df.month.subset <- df.month.subset %>% 
+  filter(Estacion %in% unique(df.month.subset$Estacion), month >= "2012 01", month <= "2022 12")
+df.month.subset %>% 
+  group_by(Estacion) %>% 
+  arrange(month, desc = TRUE) %>%
+  summarise(fecha_min = min(month), fecha_max = max(month))
+```
+
+
+
+# Análisis exploratorio de datos
+Se realiza un análisis exploratorio de datos para comprender mejor las características de la base de datos, como la distribución de las variables, la presencia de valores atípicos y la correlación entre las variables. 
+
+```{r}
+resultado_pca<-PCA(df.week.subset[,-c(1,2)], scale.unit = TRUE, ncp = 4, graph = TRUE)
+```
+```{r}
+# guardar el dataframe como archivo de Excel
+write_xlsx(df, "df.xlsx")
+```
+
+Los factores "PM1","PM2.5","PM10","NO","NO2","NOx","O3","SO2","CO","Ruido","Viento (velocidad y direccion)"      "Temperatura","Humedad","Presion","Radiacion","Precipitacion" están relacionados con la calidad del aire y las condiciones ambientales. Se explica brevemente la relación entre cada uno de ellos:
+
+- PM1, PM2.5 y PM10: son partículas suspendidas en el aire de diferentes tamaños que pueden afectar la salud humana. La exposición prolongada a niveles altos de estas partículas puede aumentar el riesgo de enfermedades respiratorias y cardiovasculares.
+
+- NO, NO2 y NOx: son óxidos de nitrógeno que se emiten principalmente por la quema de combustibles fósiles. La exposición a niveles altos de estos compuestos puede irritar las vías respiratorias y empeorar los síntomas del asma.
+
+- O3: es el ozono troposférico, un gas que se forma cuando los óxidos de nitrógeno y los compuestos orgánicos volátiles reaccionan con la luz solar. La exposición prolongada a niveles altos de ozono puede causar daño pulmonar y agravar los síntomas del asma.
+
+- SO2: es el dióxido de azufre, un gas que se produce principalmente por la quema de combustibles fósiles. La exposición a niveles altos de SO2 puede irritar las vías respiratorias y empeorar los síntomas del asma.
+
+- CO: es el monóxido de carbono, un gas inodoro e incoloro que se produce por la quema incompleta de combustibles fósiles. La exposición a niveles altos de CO puede ser fatal.
+
+- Ruido: es el sonido no deseado que se produce en el ambiente. La exposición prolongada a niveles altos de ruido puede afectar la salud auditiva y causar otros efectos adversos para la salud.
+
+- Velocidad del viento: influye en la dispersión de los contaminantes en el aire y puede afectar la calidad del aire en áreas cercanas a fuentes de emisión.
+
+- Temperatura: influye en la formación de ozono y en la reactividad de otros contaminantes en el aire. La temperatura también puede afectar la tasa de emisión de contaminantes.
+
+- Humedad: influye en la formación y el transporte de contaminantes en el aire. La humedad también puede afectar la deposición de partículas en superficies.
+
+- Presión: influye en la formación y el transporte de contaminantes en el aire, así como en la dispersión de los contaminantes.
+
+- Radiación solar: influye en la formación de ozono y en la reactividad de otros contaminantes en el aire. La radiación solar también puede afectar la temperatura y la tasa de emisión de contaminantes.
+
+- Precipitación: puede limpiar el aire de los contaminantes y reducir los niveles de partículas en suspensión y gases contaminantes.
+
+En general, todos estos factores están interrelacionados y pueden afectar la calidad del aire y las condiciones ambientales de una región. Por lo tanto, es importante monitorear y controlar estos factores para proteger la salud pública y el medio ambiente.
+
+# Objetivos
+
+1. Análisis de tendencias y patrones para comprender cómo ha evolucionado la calidad del aire y las condiciones meteorológicas en diferentes estaciones y momentos del tiempo. Analisar la evolución de la concentración de partículas en el aire a lo largo del tiempo para identificar posibles tendencias y patrones estacionales. Datos Funcionales con resultado de PCA (Componente particulas en el are) analisis de curvas (cada cuarva es una estacion) en t=216 (meses desde 2004/01-2022/12)
+
+2. Análisis de correlación entre la concentración de partículas en el aire y las condiciones meteorológicas para entender cómo las condiciones meteorológicas pueden afectar la calidad del aire.
+
+3. Crear modelo predictivo para predecir la concentración de partículas en el aire en función de las condiciones meteorológicas y la evolución de la concentración de particulas. AR(3)
+
+4. Análisis espacial para entender cómo varía la calidad del aire en diferentes estaciones. 
+
+Variables 
+Y: PM1 PM2.5 PM10 NO NO2 NOx O3 SO2 CO Variables 
+X: Vviento Dvient VMviento Temperatura Humedad Presion Radiacion Precipitacion
+13 lotes - Estaciones
+Trayectorias - años/meses
+
+# ANALISIS DE DATOS FUNCIONALES
+
+```{r}
+library(fda) # FDA functions - Ramsay and Silverman book
+library(fds) # Functional datasets
+library(Epi) # ROC curve
+library(caret)
+library(smotefamily)
+library(rpart)
+library(rpart.plot)
+```
+# O3
+# Transformar los datos
+
+```{r}
+data_O3<-df.month.subset[, c("month", "Estacion", "O3")]
+
+# Transformar dataframe
+data_O3 <- data_O3 %>%
+  pivot_wider(names_from = Estacion, values_from = O3)
+
+
+O3<-df.month.subset$O3
+t<-df.month.subset$month
+Estaciones<-df.month.subset$Estacion
+
+df <- data.frame(path = path, t = t, Estaciones = Estaciones)
+
+ggplot(df, aes(x = t, y = O3, color = Estaciones, group = Estaciones)) +
+  geom_line() +
+  labs(x = "Mes", y = "O3", color = "Estaciones") +
+  theme_minimal()
+```
+
+# Representacion básicA
+
+Consideramos la base de Fourier para los datos periódicos
+
+```{r}
+t <- 1:132
+Fourier_basis <- create.fourier.basis(rangeval = c(min(t), max(t)), nbasis = 11) # Base
+O3_matrix <- as.matrix(data_O3[, 2:8]) # Convertir las columnas seleccionadas a una matriz
+O3_fd <- Data2fd(y = O3_matrix, argvals = t, basisobj = Fourier_basis) # Objeto funcional
+
+# Visualizar el objeto funcional
+plot(O3_fd, lty = 1, xlab = "Month", ylab = "O3")
+legend('bottomright',bty = "n",c("Avda. Francia", "Bulevard Sud", "Conselleria Meteo", "Moli del Sol", "Pista Silla", "Politecnico", "Viveros"), pch=16, cex=0.8, col=1:4)
+```
+```{r}
+plot(O3_fd, lty=1,col="grey",ylab="O3",xlab="t", ylim=c(40,60))
+lines(mean.fd(O3_fd), lty=2, lwd=2, col="green")
+legend('topright',bty = "n",c('Total muestra', 'Media'),
+       lty=1,lwd=1,col=c("grey","green"))
+```
+# NO2 
+```{r}
+data_NO2<-df.month.subset[, c("month", "Estacion", "NO2")]
+
+# Transformar dataframe
+data_NO2 <- data_NO2 %>%
+  pivot_wider(names_from = Estacion, values_from = NO2)
+
+
+NO2<-df.month.subset$NO2
+
+df_NO2 <- data.frame(path = NO2, t = t, Estaciones = Estaciones)
+
+ggplot(df_NO2, aes(x = t, y = O3, color = Estaciones, group = Estaciones)) +
+  geom_line() +
+  labs(x = "Mes", y = "NO2", color = "Estaciones") +
+  theme_minimal()
+```
+# Representacion básica
+
+Consideramos la base de Fourier para los datos periodicos
+
+```{r}
+t <- 1:132
+Fourier_basis_NO2 <- create.fourier.basis(rangeval = c(min(t), max(t)), nbasis = 11) # Base
+NO2_matrix <- as.matrix(data_NO2[, 2:8]) # Convertir las columnas seleccionadas a una matriz
+NO2_fd <- Data2fd(y = NO2_matrix, argvals = t, basisobj = Fourier_basis) # Objeto funcional
+
+# Visualizar el objeto funcional
+plot(NO2_fd, lty = 1, xlab = "Month", ylab = "NO2")
+legend('bottomright',bty = "n",c("Avda. Francia", "Bulevard Sud", "Conselleria Meteo", "Moli del Sol", "Pista Silla", "Politecnico", "Viveros"), pch=16, cex=0.8, col=1:4)
+```
+```{r}
+plot(NO2_fd, lty=1,col="grey",ylab="NO2",xlab="t", ylim=c(10,50))
+lines(mean.fd(NO2_fd), lty=2, lwd=2, col="green")
+legend('topright',bty = "n",c('Total muestra', 'Media'),
+       lty=1,lwd=1,col=c("grey","green"))
+```
+
+# Analisis en Componentes Principales Funcionales
+
+## Ozono
+ 
+```{r}
+fpca <- pca.fd(fdobj = O3_fd, nharm = 3, centerfns = TRUE)
+
+weight_functions <- fpca$harmonics
+principal_components <- fpca$scores 
+(explained_variability <- round(fpca$varprop,4)*100)
+```
+
+La varianza explicada sobre los datos de las primeras 3 componentes principales es de `r round(sum(explained_variability),4)`\%. 
+
+## Funciones de peso estimadas w1(t),w2(t),w3(t)
+
+```{r}
+par(mfrow=c(2,2))
+plot(weight_functions[1], ylab="Weight function 1", xlab="t", ylim=c(-1,1),
+     main=paste("PC1 ", "(",explained_variability[1],"%)",sep=""))
+plot(weight_functions[2], ylab="Weight function 2", xlab="t", ylim=c(-1,1),
+     main=paste("PC2 ", "(",explained_variability[2],"%)",sep=""))
+plot(weight_functions[3], ylab="Weight function 3", xlab="t", ylim=c(-1,1),
+     main=paste("PC3 ", "(",explained_variability[3],"%)",sep=""))
+```
+
+## Representación gráfica de los Scores
+
+```{r}
+par(pty="s")
+plot(principal_components[,1], principal_components[,2], asp=1, col=O3+1, pch=19,
+     xlab="PC1", ylab="PC2", main="Gráfico de Scores",
+     xlim=c(-100,100),ylim=c(-100,100))
+legend('bottomleft',bty = "n",c("Avda. Francia", "Bulevard Sud", "Conselleria Meteo", "Moli del Sol", "Pista Silla", "Politecnico", "Viveros"), pch=16, cex=0.8, col=O3+1)
+```
+
+# Modelos Predictivos
+
+Con el objetivo de predecir los niveles de Ozono (O3) creamos modelos de predicción
+
+```{r}
+# Particion en train (80%) y test (20%)
+set.seed(123) 
+
+trainIndex <- createDataPartition(df.month.subset$O3, p=.7, list = FALSE, times = 1)
+Xtrain <- df.month.subset[trainIndex,]
+Xtest <- df.month.subset[-trainIndex,]
+```
+
+## Regresión lineal
+
+Ajustamos un modelo de regresión lineal con datos de entrenamiento y predicimos los valores de la variable respuesta *O3* en el conjunto de prueba. Luego, se calculan los residuos y medidas de bondad de ajuste.
+
+```{r}
+regression <- lm(O3 ~ ., data = Xtrain)
+pred.reg <- predict(regression, newdata = Xtest)
+tr.res <- data.frame(Xtrain$O3, regression$fitted.values, regression$residuals)
+vl.res <- data.frame(Xtest$O3, pred.reg,
+                     residuals = Xtest$O3 - pred.reg)
+forecast::accuracy(pred.reg, Xtest$O3)
+summary(regression)
+```
+
+Function *fRegress{fda}* is considered in order to fit the functional linear regression model.
+```{r warning=FALSE}
+#Elements of xfdlist
+xfdlist<-vector("list", 2) #crea una lista con 2 elementos
+xfdlist[[1]]<- rep(1, 7) #vector de unos de longitud 7
+xfdlist[[2]]<- O3_fd #objeto funcional
+
+# Elements of betalist
+con_basis <- create.constant.basis(c(1,132)) #función constante en el intervalo [1,132]
+plot(con_basis)
+
+# Basis function for beta
+beta_basis <- create.bspline.basis(rangeval = range(t), nbasis = 11) #for smoother representation 32 basis is considered
+betalist<- vector("list", 2)
+betalist[[1]]<-con_basis
+betalist[[2]]<-beta_basis
+
+model<-fRegress(O3, xfdlist, betalist)
+
+# The estimated regression parameters
+beta_est_list = model$betaestlist
+intercept<-coef(beta_est_list[[1]])
+beta_fd=beta_est_list[[2]]$fd
+
+```
+
